@@ -1,0 +1,4 @@
+512 recordings in memory max
+4 seconds per recording (will take less than 256mb ram)
+
+
