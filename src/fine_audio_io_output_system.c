@@ -15,7 +15,7 @@
 
 extern fine_reverb_model my_reverb;
 
-int fine_output_read_until(i16 * const data, size_t const sz, snd_pcm_t *const pcm_out, snd_pcm_hw_params_t *const hw_out, _Atomic(bool) *fade_out) {
+int fine_output_read_until(i16 const*const data, size_t const sz, snd_pcm_t *const pcm_out, snd_pcm_hw_params_t *const hw_out, _Atomic(bool) *fade_out) {
 	//TODO: check if writing FULL buffer works
 	
 	snd_pcm_sframes_t left = sz;
@@ -23,6 +23,7 @@ int fine_output_read_until(i16 * const data, size_t const sz, snd_pcm_t *const p
 	if(snd_pcm_hw_params_get_period_size(hw_out, &tmp_uframe, 0)<0) 
 		fine_exit("Input period size cannot be read");
 	snd_pcm_uframes_t const per_write = tmp_uframe;
+	i16 *write_buf = calloc(per_write, sizeof(i16));
 	float gain = 1;
 	int do_fade = 0;
 	while(left > 0 && gain > 0.01) {
@@ -32,7 +33,15 @@ int fine_output_read_until(i16 * const data, size_t const sz, snd_pcm_t *const p
 		}
 		snd_pcm_sframes_t const towrite = left < per_write? left : per_write;
 		snd_pcm_sframes_t written; 
-		while((written = snd_pcm_writei(pcm_out, data+(sz-left), towrite)) < 0) {
+		memcpy(write_buf, data+(sz-left), towrite*sizeof(i16));
+
+		if(do_fade) {
+			gain -= (float)1/16;
+			for(size_t i = 0; i < towrite; ++i) {
+				write_buf[i] = roundf(write_buf[i]*gain);
+			}
+		}
+		while((written = snd_pcm_writei(pcm_out, write_buf, towrite)) < 0) {
 			switch(written) {
 				case -EPIPE:
 					fine_log(ERROR, "BUFFER UNDERRUN playing %zu frames", towrite);
@@ -49,85 +58,98 @@ int fine_output_read_until(i16 * const data, size_t const sz, snd_pcm_t *const p
 		}
 		if(written < towrite)
 			fine_log(WARN, "expected to write %zu frames, actually wrote %zu frames", towrite, written);
-		if(do_fade) {
-			gain -= 0.125;
-			for(int i = 0; i < written; ++i) {
-				data[sz-left+i]*=gain;
-			}
-		}
 		left -= written;
 	}
+	free(write_buf);
 
 	fine_log(DEBUG, "played %zu frames from buffer", sz);
 	return 0;
 }
 
 
-int frand() {
+//TODO: implement
+int fast_rand() {
 	return rand();
 }
 
 /* 
+ * 
  * The size of the array is always OPT_NUM_RECORDINGS
- * 0 means the earliest recording, 1 means the second earliest, etc.
+ * 0 means the newest recording, 1 means the second newest, etc.
+ * @return the number of recordings generated
  * */
-void gen_indices(size_t *const arr, size_t const num_recordings) {
+size_t gen_indices(size_t *const arr, size_t const num_recordings) {
 	//NOTE: IMPORTANT! do NOT access the very back recording (never set an index to MAX_NUM_REC-1. it is not thread safe
 
+	size_t upper = num_recordings;
 	size_t idx = 0;
-	arr[idx] = 0;
-	++idx;
-
-	for(; idx<num_recordings; ++idx) {
-		arr[idx] = idx;
+	while(upper > 0 && idx < OPT_NUM_RECORDINGS) {
+		int r = fast_rand();
+		upper = r%upper;
+		arr[idx] = upper;
+		++idx;
 	}
+	return idx;
 }
 
 /* 
+ * @param arr should be zeroed
  * The size of the array is always OPT_NUM_RECORDINGS
  * */
-void gen_samples(size_t *const arr, size_t const max_num) {
-	
-	for(size_t i = 0; i < OPT_NUM_RECORDINGS; ++i) {
-		arr[i] = max_num;
-	}
+void gen_samples(
+	size_t *const smpl_arr, Recording const*const recordings, 
+	size_t const*const indices, size_t const end_idx, size_t const max_num_samples) {
 
+	//TODO: implement max num samples someway
+	assert(end_idx <= OPT_NUM_RECORDINGS);
+	
+	size_t const step = RECORDING_SIZE/(8*3); //allow thirds and eights
+	assert(step>0);
+	for(size_t i = 0; i < end_idx; ++i) {
+		size_t const recsz = recordings[indices[i]].sz;
+		if(!recsz ){
+			fine_log(WARN, "Warning: Recording of size zero");
+			smpl_arr[i] = 0;
+			continue;
+		}
+		int r = fast_rand();
+		size_t const requestedsz = step*((r%recsz)/step);
+		smpl_arr[i] = requestedsz == 0 ? recsz : requestedsz;
+		// This should be guaranteed: assert(smpl_arr[i] <= RECORDING_SIZE);
+	}
 }
 
-/*
+/* Safe if num_samples[i] is 0. In this case it just skips it.
  * @return the size of the rendered sound, guaranteed to be the sum of num_tail_samples and the array num_samples
+ * 
  * */
-int render_recordings(i16 *const data, ASys const*const sys, size_t const*const indices, size_t const*const num_samples, size_t const num_tail_samples) {
-	Recording const*const recs = sys->rec_arr;
-	size_t const start_idx = sys->rec_idx-1;
+int render_recordings(i16 *const data, Recording const*const recordings, size_t rec_start_idx, size_t const*const indices, size_t const end_idx, size_t const*const num_samples, size_t const num_tail_samples) {
 	size_t ind_towrite = 0;
 	//simply concat for now
-	for(size_t i =0 ; i < OPT_NUM_RECORDINGS; ++i) {
-		int tmp_rec[] = {0};
+	for(size_t i =0 ; i < end_idx; ++i) {
 		
+		memcpy(data+ind_towrite, recordings[((size_t)MAX_NUM_REC + rec_start_idx-indices[i])%MAX_NUM_REC].data, sizeof(i16)*num_samples[i]);
+		int r = fast_rand();
 
-		memcpy(data+ind_towrite, recs[(start_idx-indices[i])%MAX_NUM_REC].data, sizeof(i16)*num_samples[i]);
-		float ampfac = frand();
+		fine_fx_amplify(data+ind_towrite, num_samples[i], 0.8f + 0.4*(r%3));
+		fine_fx_compress(data+ind_towrite, num_samples[i], SAMPLE_RATE, 5000.0f, 10.0f, 3.0f, 80.0f, 1.0f);
 
-		fine_fx_amplify(data+ind_towrite, num_samples[i], 4*(float)ampfac/RAND_MAX);
-		fine_fx_compress(data+ind_towrite, num_samples[i], 48000, 5000.0f, 10.0f, 3.0f, 80.0f, 1.0f);
+		//   fine_fx_compress(samples, n_samples, sample_rate,
+		//                    8000.0f,   // threshold (linear, same scale as int16 samples, e.g. 32767 max)
+		//                    4.0f,      // ratio (>=1.0)
+		//                    5.0f,      // attack_ms
+		//                    80.0f,     // release_ms
+		//                    1.0f);     // makeup gain (linear multiplier)
 
-		fine_fx_fade_linear(data+ind_towrite, num_samples[i], 48000, 48000);
-
-//   fine_fx_compress(samples, n_samples, sample_rate,
-//                    8000.0f,   // threshold (linear, same scale as int16 samples, e.g. 32767 max)
-//                    4.0f,      // ratio (>=1.0)
-//                    5.0f,      // attack_ms
-//                    80.0f,     // release_ms
-//                    1.0f);     // makeup gain (linear multiplier)
+		fine_fx_fade_linear(data+ind_towrite, num_samples[i], (r%3)*num_samples[i]/8, (r%3)*num_samples[i]/8);
 
 		ind_towrite += num_samples[i];
 	}
 
 	size_t const total_num_samples = ind_towrite + num_tail_samples;
 
-	float r1 = (float)frand()/RAND_MAX;
-	float r2 = (float)frand()/RAND_MAX;
+	float r1 = (float)fast_rand()/RAND_MAX;
+	float r2 = (float)fast_rand()/RAND_MAX;
 	float room = r1;
 	float damp = r2;
 	float wet  = r1;
@@ -142,16 +164,10 @@ int fine_thread_output(void *ptr) {
 	ASys *const sys = ptr;
 	snd_pcm_drop(sys->pcm_out);
 
-	unsigned CUR_RATE = 0;
-	if(snd_pcm_hw_params_get_rate(sys->hw_in, &CUR_RATE,0)<0)
-		fine_exit("Could not get sample rate");
-
-	//NOTE: IN DEV
-
 	size_t recordings_indices[OPT_NUM_RECORDINGS] = {0};
 	size_t num_samples[OPT_NUM_RECORDINGS] = {0};
 
-	size_t const NUM_TAIL_SAMPLES = CUR_RATE*2; //2 seconds
+	size_t const NUM_TAIL_SAMPLES = SAMPLE_RATE*2; //2 seconds
 	//NOTE: IMPORTANT: output length must be the same as the recordings concatentaed, plus the tail
 	i16 *data = calloc(NUM_TAIL_SAMPLES + RECORDING_SIZE*OPT_NUM_RECORDINGS, sizeof(i16));
 	while(!atomic_load_explicit(&sys->stopped, memory_order_acquire)) {
@@ -160,16 +176,15 @@ int fine_thread_output(void *ptr) {
 			cnd_wait(&sys->playback, &sys->playback_mtx);
 		}
 		//This needs to be fast
-		gen_indices(recordings_indices, sys->rec_csz);
-		gen_samples(num_samples, RECORDING_SIZE);
+		size_t end_ind = gen_indices(recordings_indices, sys->rec_csz);
+		gen_samples(num_samples, sys->rec_arr, recordings_indices, end_ind, RECORDING_SIZE);
 		
 		mtx_unlock(&sys->playback_mtx);
 
-		//NOTE: We don't lock bc we won't read from the very last recording (the one that the input thread is actually touching)
-		int64_t data_sz = render_recordings(data, sys, recordings_indices, num_samples, NUM_TAIL_SAMPLES);
+		//NOTE: We don't lock bc we won't read from oldest recording (the one that the input thread is actually touching)
+		int64_t data_sz = render_recordings(data, sys->rec_arr, sys->rec_idx, recordings_indices, end_ind, num_samples, NUM_TAIL_SAMPLES);
 
-
-		fine_log(DEBUG, "expecting to play %zu seconds", data_sz/CUR_RATE);
+		fine_log(DEBUG, "expecting to play %zu seconds", data_sz/SAMPLE_RATE);
 		
 		snd_pcm_prepare(sys->pcm_out);
 		//Blocks until playback ends
@@ -178,6 +193,5 @@ int fine_thread_output(void *ptr) {
 		snd_pcm_drop(sys->pcm_out);
 	}
 	free(data);
-	//TODO: cleanup
 
 }

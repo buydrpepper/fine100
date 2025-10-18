@@ -8,15 +8,16 @@ typedef int16_t i16;
 typedef struct ASys ASys;
 typedef struct ASys_params ASys_params;
 typedef struct Recording Recording;
-#define RECORDING_SIZE (48000*2)
-#define IDLE_BUFSZ 48000
+#define SAMPLE_RATE 48000
+#define RECORDING_SIZE (SAMPLE_RATE*4) //Max recording length is 4 seconds
+#define IDLE_BUFSZ SAMPLE_RATE
 #define MAX_NUM_REC 512
+#define OPT_NUM_RECORDINGS 10
 struct Recording {
 	size_t sz;
 	i16 data[RECORDING_SIZE];
 };
 struct ASys {
-
 
 	/*only the input thread will access idx, csz, next_rec_addr, and dereference idle_buf*/
 	size_t idle_buf_idx;
@@ -49,5 +50,4 @@ struct ASys {
 };
 
 
-#define OPT_NUM_RECORDINGS 10
 

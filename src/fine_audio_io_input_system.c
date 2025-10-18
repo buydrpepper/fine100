@@ -13,11 +13,6 @@
 fine_reverb_model my_reverb;
 
 void fine_thread_init_everything(ASys *const res, snd_pcm_hw_params_t *const hw_out, snd_pcm_hw_params_t *const hw_in, snd_pcm_t *const pcm_out, snd_pcm_t *const pcm_in) {
-	unsigned CUR_RATE = 0;
-	unsigned const input_buffer_length_ms = 500;
-	if(snd_pcm_hw_params_get_rate(hw_in, &CUR_RATE,0)<0)
-		fine_exit("Could not get sample rate");
-	fine_log(DEBUG, "RATE: %u", CUR_RATE);
 	fine_log(INFO, "Recordings will take around %zu MB of RAM", sizeof(Recording) * MAX_NUM_REC/1000000);
 	if(sizeof(Recording) * MAX_NUM_REC/1000000 >= 256) fine_log(WARN, "Recordings using too much memory");
 
@@ -38,6 +33,8 @@ void fine_thread_init_everything(ASys *const res, snd_pcm_hw_params_t *const hw_
 	};
 
 	memcpy(res, &sys, sizeof(ASys));
+	//NOTE: sys is dead now, do not reference it
+	
 	//set mtx, playback, updaterecordings, nextrecaddr
 	mtx_init(&(res->playback_mtx), mtx_plain);
 	cnd_init(&(res->playback));
@@ -49,9 +46,35 @@ void fine_thread_init_everything(ASys *const res, snd_pcm_hw_params_t *const hw_
 	reverb_init(&my_reverb);
 	//PRELOAD MY RECORDINGS HERE:
 	
-	
+	//16 LE
+	FILE *curfile;
+	size_t file_num = 0;
+	while(file_num < MAX_NUM_REC){
+		char fname[32] = {0};
+		sprintf(fname, "data/%zu.raw", file_num);
+		curfile = fopen(fname, "rb");
+		if(!curfile) break;
+
+		fseek(curfile, 0, SEEK_END);
+		long const num_samples = ftell(curfile)/sizeof(i16);
+		if(ftell(curfile)%sizeof(i16))
+			fine_log(WARN, "Flie %zu is not divisible into 16 bit segments. Ignoring tail.", file_num);
+
+		rewind(curfile);
+
+		
+		res->rec_arr[res->rec_idx].sz = fread(
+			res->rec_arr[res->rec_idx].data, sizeof(i16), P99_MINOF(num_samples, RECORDING_SIZE), curfile
+		);
+		fclose(curfile);
 
 
+		++file_num;
+		res->rec_idx = file_num;
+		res->rec_csz = file_num;
+	}
+
+	fine_log(INFO, "loaded %zu files into memory", file_num);
 }
 
 size_t fine_input_write_until(i16 * const data, size_t const sz, snd_pcm_t *const pcm_in, snd_pcm_hw_params_t *const hw_in, float const alpha, i16 const THRESH_LOWER) {
@@ -111,13 +134,12 @@ size_t fine_input_write_until(i16 * const data, size_t const sz, snd_pcm_t *cons
 }
 //TODO: xrun fix
 int fine_thread_input_idle(void *ptr) {
-	int const SAMPLES_PER_FRAME=1;
 	ASys *const sys = ptr;
 	snd_pcm_prepare(sys->pcm_in);
 	snd_pcm_uframes_t period_sz = 0;
 	if(snd_pcm_hw_params_get_period_size(sys->hw_in, &period_sz, 0)<0)
 		fine_exit("Could not get input period size");
-	size_t const num_in_samples = period_sz*SAMPLES_PER_FRAME;
+	size_t const num_in_samples = period_sz; //NOTE: Here one frame is one sample, b/c single channel
 
 	size_t const bufsz = IDLE_BUFSZ;
 	assert(num_in_samples <= bufsz);
@@ -161,11 +183,11 @@ int fine_thread_input_idle(void *ptr) {
 
 		int const seconds_since_approx = now.tv_sec-last_recording.tv_sec;
 
-		if(seconds_since_approx > IDLE_BUFSZ/48000) {
-			atomic_store_explicit(&sys->play, 0, memory_order_release); //2 seconds chance to play after recording
+		if(seconds_since_approx > IDLE_BUFSZ/SAMPLE_RATE) {
+			atomic_store_explicit(&sys->play, 0, memory_order_release); //1 seconds chance to play after recording
 		}
 		
-		if(ema_upper >= THRESH_UPPER && seconds_since_approx > IDLE_BUFSZ/48000) { //record until lower thresh is reached
+		if(ema_upper >= THRESH_UPPER && seconds_since_approx > IDLE_BUFSZ/SAMPLE_RATE) { //record until lower thresh is reached
 			
 			atomic_store_explicit(&sys->play, 0, memory_order_release);
 			//signal output thread to fade out.
