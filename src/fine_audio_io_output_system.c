@@ -107,7 +107,12 @@ int render_recordings(i16 *const data, ASys const*const sys, size_t const*const 
 		
 
 		memcpy(data+ind_towrite, recs[(start_idx-indices[i])%MAX_NUM_REC].data, sizeof(i16)*num_samples[i]);
-		fine_fx_compress(data+ind_towrite, num_samples[i], 48000, 8000.0f, 4.0f, 5.0f, 80.0f, 1.0f);
+		float ampfac = frand();
+
+		fine_fx_amplify(data+ind_towrite, num_samples[i], 4*(float)ampfac/RAND_MAX);
+		fine_fx_compress(data+ind_towrite, num_samples[i], 48000, 5000.0f, 10.0f, 3.0f, 80.0f, 1.0f);
+
+		fine_fx_fade_linear(data+ind_towrite, num_samples[i], 48000, 48000);
 
 //   fine_fx_compress(samples, n_samples, sample_rate,
 //                    8000.0f,   // threshold (linear, same scale as int16 samples, e.g. 32767 max)
@@ -118,15 +123,16 @@ int render_recordings(i16 *const data, ASys const*const sys, size_t const*const 
 
 		ind_towrite += num_samples[i];
 	}
-	float room = 0.75f; // 75% room size
-	float damp = 0.4f;  // 40% damping
-	float wet  = 0.3f;  // 30% wet signal
-	float dry  = 0.7f;  // 70% dry signal
 
 	size_t const total_num_samples = ind_towrite + num_tail_samples;
 
+	float r1 = (float)frand()/RAND_MAX;
+	float r2 = (float)frand()/RAND_MAX;
+	float room = r1;
+	float damp = r2;
+	float wet  = r1;
+	float dry  = 1-r1;
 	reverb_set_params(&my_reverb, room, damp, wet, dry);
-	//
 	fine_fx_reverb(data, total_num_samples, &my_reverb);
 	return total_num_samples;
 }

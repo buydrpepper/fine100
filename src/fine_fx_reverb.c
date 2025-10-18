@@ -1,3 +1,4 @@
+//NOTE: TRANSLATION OF FREEVERB BY GEMINI 
 #include "fine_fx_reverb.h"
 #include <string.h> // For memset
 
