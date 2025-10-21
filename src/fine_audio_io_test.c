@@ -40,7 +40,6 @@ int fine_input_write_buf(i16 * const data, size_t const sz, snd_pcm_t *const pcm
 		left -= wasread;
 	}
 
-	fine_log(DEBUG, "wrote %zu frames to buffer", sz);
 
 	return 0;
 }

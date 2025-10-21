@@ -8,35 +8,36 @@ typedef int16_t i16;
 typedef struct ASys ASys;
 typedef struct ASys_params ASys_params;
 typedef struct Recording Recording;
+#define RECORDING_SIZE (48000*2)
+#define IDLE_BUFSZ 48000
+#define MAX_NUM_REC 512
 struct Recording {
 	size_t sz;
-	i16 data[];
-};
-struct ASys_params {
-	size_t max_num_recording_smp;
-	size_t idle_buf_sz;
-	size_t max_rec_num;
+	i16 data[RECORDING_SIZE];
 };
 struct ASys {
 
-	ASys_params const params;
 
 	/*only the input thread will access idx, csz, next_rec_addr, and dereference idle_buf*/
 	size_t idle_buf_idx;
 	size_t idle_buf_csz;
 	i16 *const idle_buf;
 
+	mtx_t fread_mtx;
+	cnd_t fread;
 
-	mtx_t mtx;
+	mtx_t playback_mtx;
 	cnd_t playback;
+	_Atomic(bool) play; //set true /false by input thread, read by output thread.
 
-	_Atomic(bool) fade_out; //set true by input thread, read by output thread and set false
-	cnd_t update_recordings;
+	_Atomic(bool) fade_out; 
 	/* Protected by mtx-- Output thread will unlock until signaled playback
 	 * Input thread captures mtx when playback ends AND input finishes. Then, output captures mtx to compute effects and playback
 	 * */
 	size_t rec_csz;
 	size_t rec_idx;
+	//NOTE: the very last recording(the max_rec_num place, if it were a queue) is not to be read
+	//and only to be written by the input thread
 	Recording *const rec_arr; //Each recording has the max possible size. Make sure this fits into 256MB
 
 	snd_pcm_hw_params_t *const hw_out;

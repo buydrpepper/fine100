@@ -2,10 +2,23 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
 #include "fine_definitions.h"
 #include "fine_log.h"
 #include "fine_audio_io.h"
 #include "fine_fx.h"
+
+
+int debugthread(void *ptr) {
+
+	ASys *const sys = ptr;
+	while(1) {
+		char c = getchar();
+		if(c == 'p') 
+			cnd_signal(&sys->playback);
+		else if(c == 'q') exit(0);
+	}
+}
 
 
 
@@ -37,16 +50,25 @@ int main(int argc, char *argv[argc+1]) {
 	snd_pcm_hw_params_t *params_in = 0;
 	snd_pcm_hw_params_alloca(&params_out);
 	snd_pcm_hw_params_alloca(&params_in);
-	fine_init_devices(name_out, name_in, &pcm_out, &pcm_in, params_out, params_in);
+
+	while(fine_init_devices(name_out, name_in, &pcm_out, &pcm_in, params_out, params_in)<0) {
+		struct timespec delay = {.tv_sec=3};
+		thrd_sleep(&delay, 0);
+		fine_log(INFO, "Configuration failed. Retrying...");
+	}
+
 	ASys *const sys = alloca(sizeof(ASys));
 	fine_thread_init_everything(sys, params_out, params_in, pcm_out, pcm_in);
 
 
-	thrd_t thrd[2];
+	thrd_t thrd[3];
 	thrd_create(thrd+0, fine_thread_input_idle, sys);
 	thrd_create(thrd+1, fine_thread_output, sys);
+	thrd_create(thrd+2, debugthread, sys);
+
 	thrd_join(thrd[0], 0);
 	thrd_join(thrd[1], 0);
+	thrd_join(thrd[2], 0);
 
 
 	printf("hi");

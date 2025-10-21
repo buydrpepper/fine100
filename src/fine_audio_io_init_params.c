@@ -8,7 +8,7 @@
 
 
 
-void fine_init_devices(char const*const out_name, char const*const in_name, 
+int fine_init_devices(char const*const out_name, char const*const in_name, 
 	 register snd_pcm_t **const pcm_out_addr, snd_pcm_t register **const pcm_in_addr,
 	 register snd_pcm_hw_params_t *const params_out, register snd_pcm_hw_params_t *const params_in) {
 
@@ -29,9 +29,9 @@ void fine_init_devices(char const*const out_name, char const*const in_name,
 
 	//Open devices
 	if(snd_pcm_open(pcm_out_addr, out_name, SND_PCM_STREAM_PLAYBACK, 0) < 0)
-		fine_exit("PCM device %s could not be opened for playback", out_name);
+		fine_log(WARN, "PCM device %s could not be opened for playback", out_name);
 	if(snd_pcm_open(pcm_in_addr, in_name, SND_PCM_STREAM_CAPTURE, 0) < 0)
-		fine_exit("PCM device %s could not be opened for capture", in_name);
+		fine_log(WARN, "PCM device %s could not be opened for capture", in_name);
 	fine_log(DEBUG, "devices opened");
 
 	//register to avoid taking address
@@ -40,62 +40,97 @@ void fine_init_devices(char const*const out_name, char const*const in_name,
 
 	//Begin hw config
 	if(snd_pcm_hw_params_any(pcm_out, params_out) < 0)
-		fine_exit("Output device cannot be configured.");
-	if(snd_pcm_hw_params_any(pcm_in, params_in) < 0)
-		fine_exit("Input device cannot be configured.");
+		fine_log(WARN, "Output device cannot be configured.");
+	if(snd_pcm_hw_params_any(pcm_in, params_in) < 0) {
+		fine_log(WARN, "Input device cannot be configured.");
+		return -1;
+	}
 	fine_log(DEBUG, "starting config");
 
-	if(snd_pcm_hw_params_set_access(pcm_out, params_out, ACCESS_OUT) < 0)
-		fine_exit("Error setting access: Output");
-	if(snd_pcm_hw_params_set_access(pcm_in, params_in, ACCESS_IN) < 0)
-		fine_exit("Error setting access: Input");
+	if(snd_pcm_hw_params_set_access(pcm_out, params_out, ACCESS_OUT) < 0) {
+		fine_log(WARN, "Error setting access: Output");
+		return -1;
+	}
+	if(snd_pcm_hw_params_set_access(pcm_in, params_in, ACCESS_IN) < 0) {
+		fine_log(WARN, "Error setting access: Input");
+		return -1;
+	}
 	fine_log(DEBUG, "set access success");
 
-	if(snd_pcm_hw_params_set_format(pcm_out, params_out, FORMAT_OUT) < 0)
-		fine_exit("Error setting format: Output");
-	if(snd_pcm_hw_params_set_format(pcm_in, params_in, FORMAT_IN) < 0)
-		fine_exit("Error setting format: Input");
+	if(snd_pcm_hw_params_set_format(pcm_out, params_out, FORMAT_OUT) < 0) {
+		fine_log(WARN, "Error setting format: Output");
+		return -1;
+	}
+	if(snd_pcm_hw_params_set_format(pcm_in, params_in, FORMAT_IN) < 0) {
+		fine_log(WARN, "Error setting format: Input");
+		return -1;
+	}
 	fine_log(DEBUG, "set format success");
 
 	unsigned exact_rate_out = RATE_OUT;
 	unsigned exact_rate_in = RATE_IN;
-	if(snd_pcm_hw_params_set_rate_near(pcm_out, params_out, &exact_rate_out, 0)<0 )
-		fine_exit("Error setting sample rate: Output");
-	if(snd_pcm_hw_params_set_rate_near(pcm_in, params_in, &exact_rate_in, 0)<0 )
-		fine_exit("Error setting sample rate: Input");
+	if(snd_pcm_hw_params_set_rate_near(pcm_out, params_out, &exact_rate_out, 0)<0 ) {
+		fine_log(WARN, "Error setting sample rate: Output");
+		return -1;
+	}
+	if(snd_pcm_hw_params_set_rate_near(pcm_in, params_in, &exact_rate_in, 0)<0 ) {
+		fine_log(WARN, "Error setting sample rate: Input");
+		return -1;
+	}
 
-	if(exact_rate_out != RATE_OUT)
+	if(exact_rate_out != RATE_OUT) {
 		fine_log(WARN, "Output: Rate of %u unsupported, using %u", RATE_OUT, exact_rate_out);
-	if(exact_rate_in != RATE_IN)
+		return -1;
+	}
+	if(exact_rate_in != RATE_IN) {
 		fine_log(WARN, "Input: Rate of %u unsupported, using %u", RATE_IN, exact_rate_in);
+		return -1;
+	}
 	fine_log(DEBUG, "set rate success");
 
-	if(snd_pcm_hw_params_set_channels(pcm_out, params_out, 1) < 0)
-		fine_exit("Could not set channels to 1: Output");
-	if(snd_pcm_hw_params_set_channels(pcm_in, params_in, 1) < 0)
-		fine_exit("Could not set channels to 1: Input");
+	if(snd_pcm_hw_params_set_channels(pcm_out, params_out, 1) < 0) {
+		fine_log(WARN, "Could not set channels to 1: Output");
+		return -1;
+	}
+	if(snd_pcm_hw_params_set_channels(pcm_in, params_in, 1) < 0) {
+		fine_log(WARN, "Could not set channels to 1: Input");
+		return -1;
+	}
 	fine_log(DEBUG, "set channels success");
 
-	if(snd_pcm_hw_params_set_periods(pcm_out, params_out, PERIODS_OUT, 0) <0)
-		fine_exit("Could not set periods: Output");
-	if(snd_pcm_hw_params_set_periods(pcm_in, params_in, PERIODS_IN, 0) <0)
-		fine_exit("Could not set periods: Input");
+	if(snd_pcm_hw_params_set_periods(pcm_out, params_out, PERIODS_OUT, 0) <0) {
+		fine_log(WARN, "Could not set periods: Output");
+		return -1;
+	}
+	if(snd_pcm_hw_params_set_periods(pcm_in, params_in, PERIODS_IN, 0) <0) {
+		fine_log(WARN, "Could not set periods: Input");
+		return -1;
+	}
 	fine_log(DEBUG, "set periods success");
 
 	//may fail, use near
 	snd_pcm_uframes_t const buf_sz_out = PERIODS_OUT*PERIOD_SIZE_OUT; 
 	snd_pcm_uframes_t const buf_sz_in = PERIODS_IN*PERIOD_SIZE_IN; 
-	if(snd_pcm_hw_params_set_buffer_size(pcm_out, params_out, buf_sz_out ) < 0)
-		fine_exit("Could not set buffer size to %d: Output", buf_sz_out);
+	if(snd_pcm_hw_params_set_buffer_size(pcm_out, params_out, buf_sz_out ) < 0) {
+		fine_log(WARN, "Could not set buffer size to %d: Output", buf_sz_out);
+		return -1;
+	}
 
-	if(snd_pcm_hw_params_set_buffer_size(pcm_in, params_in, buf_sz_in ) < 0)
-		fine_exit("Could not set buffer size to %d: Input", buf_sz_in);
+	if(snd_pcm_hw_params_set_buffer_size(pcm_in, params_in, buf_sz_in ) < 0) {
+		fine_log(WARN, "Could not set buffer size to %d: Input", buf_sz_in);
+		return -1;
+	}
 
 	fine_log(DEBUG, "set buffers success");
-	if (snd_pcm_hw_params(pcm_out, params_out) < 0)
-		fine_exit("Failed to apply hardware parameters: Output");
-	if (snd_pcm_hw_params(pcm_in, params_in) < 0)
-		fine_exit("Failed to apply hardware parameters: Input");
+	if (snd_pcm_hw_params(pcm_out, params_out) < 0) {
+		fine_log(WARN, "Failed to apply hardware parameters: Output");
+		return -1;
+	}
+	if (snd_pcm_hw_params(pcm_in, params_in) < 0) {
+		fine_log(WARN, "Failed to apply hardware parameters: Input");
+		return -1;
+	}
 	fine_log(INFO, "devices are ready");
+	return 0;
 }
 
