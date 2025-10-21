@@ -72,6 +72,11 @@ int fast_rand() {
 	return rand();
 }
 
+typedef struct TimeFrame TimeFrame;
+struct TimeFrame {
+	size_t offs;
+	size_t num_samples;
+};
 /* 
  * 
  * The size of the array is always OPT_NUM_RECORDINGS
@@ -81,13 +86,15 @@ int fast_rand() {
 size_t gen_indices(size_t *const arr, size_t const num_recordings) {
 	//NOTE: IMPORTANT! do NOT access the very back recording (never set an index to MAX_NUM_REC-1. it is not thread safe
 
-	size_t upper = num_recordings;
 	size_t idx = 0;
-	while(upper > 0 && idx < OPT_NUM_RECORDINGS) {
-		int r = fast_rand();
-		upper = r%upper;
-		arr[idx] = upper;
+	for(size_t i = 0; i < OPT_NUM_RECORDINGS; ++i) {
+		size_t r = fast_rand()%P99_MINOF(num_recordings, MAX_NUM_REC-1);
+		for(size_t j = 0; j < idx; ++j) {
+			if (arr[j] == r) goto SKIP;
+		}
+		arr[idx] = r;
 		++idx;
+		SKIP:
 	}
 	return idx;
 }
@@ -97,7 +104,7 @@ size_t gen_indices(size_t *const arr, size_t const num_recordings) {
  * The size of the array is always OPT_NUM_RECORDINGS
  * */
 void gen_samples(
-	size_t *const smpl_arr, Recording const*const recordings, 
+	TimeFrame *const smpl_arr, Recording const*const recordings, size_t const newest_rec_idx,
 	size_t const*const indices, size_t const end_idx, size_t const max_num_samples) {
 
 	//TODO: implement max num samples someway
@@ -106,16 +113,22 @@ void gen_samples(
 	size_t const step = RECORDING_SIZE/(8*3); //allow thirds and eights
 	assert(step>0);
 	for(size_t i = 0; i < end_idx; ++i) {
-		size_t const recsz = recordings[indices[i]].sz;
+		size_t const recsz = recordings[((size_t)MAX_NUM_REC + newest_rec_idx-indices[i])%MAX_NUM_REC].sz;
 		if(!recsz ){
 			fine_log(WARN, "Warning: Recording of size zero");
-			smpl_arr[i] = 0;
+			smpl_arr[i] = (TimeFrame){0,0};
 			continue;
 		}
 		int r = fast_rand();
 		size_t const requestedsz = step*((r%recsz)/step);
-		smpl_arr[i] = requestedsz == 0 ? recsz : requestedsz;
-		// This should be guaranteed: assert(smpl_arr[i] <= RECORDING_SIZE);
+		size_t const finalsz = requestedsz == 0 ? recsz : requestedsz;
+		smpl_arr[i].num_samples=finalsz;
+		int r2 = fast_rand();
+		size_t const reqoffs = step*((r2%(recsz-finalsz+1))/step);
+		int r3 = fast_rand();
+		smpl_arr[i].offs = r3%3? 0 : reqoffs;
+
+		assert(smpl_arr[i].num_samples+smpl_arr[i].offs <= RECORDING_SIZE);
 	}
 }
 
@@ -123,7 +136,7 @@ void gen_samples(
  * @return the size of the rendered sound, guaranteed to be the sum of num_tail_samples and the array num_samples
  * 
  * */
-int render_recordings(i16 *const data, size_t data_sz, Recording const*const recordings, size_t rec_start_idx, size_t const*const indices, size_t const num_recordings_selected, size_t const*const num_samples, size_t const num_tail_samples) {
+int render_recordings(i16 *const data, size_t data_sz, Recording const*const recordings, size_t const newest_rec_idx, size_t const*const indices, size_t const num_recordings_selected, TimeFrame const*const timeframes, size_t const num_tail_samples) {
 	size_t ind_towrite = 0;
 
 	i16 *cur_render = calloc(RECORDING_SIZE+num_tail_samples,sizeof(i16));
@@ -133,14 +146,14 @@ int render_recordings(i16 *const data, size_t data_sz, Recording const*const rec
 	for(size_t i =0 ; i < num_recordings_selected; ++i) {
 
 		//prevent reverb feedback. NOTE: if later samples affect earlier ones, this is not enough.
-		memset(cur_render+num_samples[i], 0, num_tail_samples * sizeof(i16));
+		memset(cur_render+timeframes[i].num_samples, 0, num_tail_samples * sizeof(i16));
 
 		//-1 because index points to the currently working index
-		memcpy(cur_render, recordings[((size_t)MAX_NUM_REC + rec_start_idx-1-indices[i])%MAX_NUM_REC].data, sizeof(i16)*num_samples[i]);
+		memcpy(cur_render, recordings[((size_t)MAX_NUM_REC + newest_rec_idx-indices[i])%MAX_NUM_REC].data+timeframes[i].offs, sizeof(i16)*timeframes[i].num_samples);
 		int r = fast_rand();
 
-		fine_fx_amplify(cur_render, num_samples[i], 0.8f + 0.4*(r%3));
-		fine_fx_compress(cur_render, num_samples[i], SAMPLE_RATE, 4000.0f, 10.0f, 3.0f, 80.0f, 1.0f);
+		fine_fx_amplify(cur_render, timeframes[i].num_samples, 6.0f + 5*(r%3));
+		fine_fx_compress(cur_render, timeframes[i].num_samples, SAMPLE_RATE, 4000.0f, 10.0f, 3.0f, 80.0f, 1.0f);
 
 		//   fine_fx_compress(samples, n_samples, sample_rate,
 		//                    8000.0f,   // threshold (linear, same scale as int16 samples, e.g. 32767 max)
@@ -149,50 +162,53 @@ int render_recordings(i16 *const data, size_t data_sz, Recording const*const rec
 		//                    80.0f,     // release_ms
 		//                    1.0f);     // makeup gain (linear multiplier)
 
-		size_t const NUM_FADE_SAMPLES = num_samples[i]/8;
-		fine_fx_fade_linear(cur_render, num_samples[i], NUM_FADE_SAMPLES, NUM_FADE_SAMPLES);
+		size_t const NUM_FADE_SAMPLES = timeframes[i].num_samples/8;
+		fine_fx_fade_linear(cur_render, timeframes[i].num_samples, NUM_FADE_SAMPLES, NUM_FADE_SAMPLES);
 
 
-		float r1 = (float)(fast_rand()%3)/2;
+		float r1 = (float)(fast_rand()%4)/3;
 		float r2 = (float)(fast_rand()%3)/2;
+		float r3 = (float)(fast_rand()%3)/2;
 		float room = r1;
-		float damp = r2;
-		float wet  = 1;
-		float dry  = 0;
+		float damp = r1;//2
+		float wet  = r3;
+		float dry  = 1-r3;
 		
 
 		reverb_set_params(&my_reverb, room, damp, wet, dry);
 		reverb_reset(&my_reverb); //must be called to destroy prev. samples
-		fine_fx_reverb(cur_render, num_samples[i]+num_tail_samples, &my_reverb);
+		fine_fx_reverb(cur_render, timeframes[i].num_samples+num_tail_samples, &my_reverb);
 
-		for(size_t j = 0; j < num_samples[i]+num_tail_samples; ++j) {
+		for(size_t j = 0; j < timeframes[i].num_samples+num_tail_samples; ++j) {
 			mixed[ind_towrite+j] += cur_render[j];
 		}
 
 		//Actually, this can be anything we like as long as it doesn't overflow.
 		//The following line is the natural thing to do:
-		ind_towrite += num_samples[i]; 
+		ind_towrite += timeframes[i].num_samples; 
 		//This line is added to "blend" the samples together
-		ind_towrite -= (4*(1-r2)+2)*NUM_FADE_SAMPLES;
+		if(i < num_recordings_selected-1) 
+			ind_towrite -= (4*(1-r2)+2)*NUM_FADE_SAMPLES;
 	}
 
 
 	free(cur_render);
 
 	size_t const total_num_samples = ind_towrite + num_tail_samples;
+	assert(total_num_samples <= data_sz);
 
 
 
 	//Limiter to prevent clipping
 	//potential off by one error is negligible
-	i16 const THRESHOLD = INT16_MAX*0.8;
+	i16 const THRESHOLD = INT16_MAX;
 	float curgain = 8.0f;
-	float targain = 0.8f;
+	float targain = 1.0f;
 	float const attack = 0.1f;
 	float const rel = 0.99f;
 	for(size_t i =0; i< total_num_samples; ++i) {
 		float const mag = fabs(curgain*(mixed[i]));
-		targain = mag > THRESHOLD? THRESHOLD/mag : 0.8;
+		targain = mag > THRESHOLD? THRESHOLD/mag : 1.0f;
 		if(targain < curgain) 
 			curgain = targain*(1.0f-attack) + attack*curgain;
 		else 
@@ -206,13 +222,12 @@ int render_recordings(i16 *const data, size_t data_sz, Recording const*const rec
 	return total_num_samples;
 }
 
-
 int fine_thread_output(void *ptr) {
 	ASys *const sys = ptr;
 	snd_pcm_drop(sys->pcm_out);
 
 	size_t recordings_indices[OPT_NUM_RECORDINGS] = {0};
-	size_t num_samples[OPT_NUM_RECORDINGS] = {0};
+	TimeFrame timeframes[OPT_NUM_RECORDINGS] = {0};
 
 	size_t const NUM_TAIL_SAMPLES = SAMPLE_RATE*8; //8 seconds
 	//NOTE: IMPORTANT: output length must be the same as the recordings concatentaed, plus the tail
@@ -225,12 +240,13 @@ int fine_thread_output(void *ptr) {
 		}
 		//This needs to be fast
 		size_t end_ind = gen_indices(recordings_indices, sys->rec_csz);
-		gen_samples(num_samples, sys->rec_arr, recordings_indices, end_ind, RECORDING_SIZE);
+
 		size_t rec_idx = sys->rec_idx;	
+		gen_samples(timeframes, sys->rec_arr, rec_idx-1, recordings_indices, end_ind, RECORDING_SIZE);
 		mtx_unlock(&sys->playback_mtx);
 
 		//NOTE: We don't lock bc we won't read from oldest recording (the one that the input thread is actually touching)
-		size_t data_sz = render_recordings(data, DATA_SZ, sys->rec_arr, rec_idx, recordings_indices, end_ind, num_samples, NUM_TAIL_SAMPLES);
+		size_t data_sz = render_recordings(data, DATA_SZ, sys->rec_arr, rec_idx-1, recordings_indices, end_ind, timeframes, NUM_TAIL_SAMPLES);
 
 		fine_log(DEBUG, "expecting to play %zu seconds", data_sz/SAMPLE_RATE);
 		

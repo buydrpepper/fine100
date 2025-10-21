@@ -117,7 +117,7 @@ size_t fine_input_write_until(i16 * const data, size_t const sz, snd_pcm_t *cons
 
 		int sum = 0;
 		for(size_t i = 0; i < wasread; ++i) {
-			sum+=abs(data[sz-left+i]);
+			sum+=P99_MINOF(abs(data[sz-left+i]), INT16_MAX/16);
 		}
 
 		ema = alpha * ((float)sum / wasread) + ema * (1-alpha);
@@ -147,10 +147,10 @@ int fine_thread_input_idle(void *ptr) {
 	assert(num_in_samples <= bufsz);
 	
 	/* --- BEGIN DEFINITIONS FOR TUNING --- */
-	float const alpha_upper = 0.7; 
-	float const alpha_lower = 0.5; //high smoothing
-	int const THRESH_UPPER = 15000; //is it faster to compare int?
-	int const THRESH_LOWER = 1000;
+	float const alpha_upper = 0.3; 
+	float const alpha_lower = 0.6; 
+	int const THRESH_UPPER = 500; 
+	int const THRESH_LOWER = 80;
 	/* --- END DEFINITIONS FOR TUNING --- */
 
 	i16 *tmp_buf = calloc(num_in_samples, sizeof(*tmp_buf));
@@ -176,7 +176,7 @@ int fine_thread_input_idle(void *ptr) {
 		int sum = 0;
 		assert(num_in_samples < INT_MAX/INT16_MAX);
 		for(size_t i = 0; i < num_in_samples; ++i) {
-			sum += abs(tmp_buf[i]);
+			sum += P99_MINOF(abs(tmp_buf[i]), INT16_MAX/16);
 			idle_buf[(bufidx + i)%bufsz] = tmp_buf[i]; //should be compiled to a memcpy
 		}
 
@@ -230,6 +230,7 @@ int fine_thread_input_idle(void *ptr) {
 
 			snd_pcm_prepare(sys->pcm_in);
 		}
+
         }
 	free(tmp_buf);
 }
