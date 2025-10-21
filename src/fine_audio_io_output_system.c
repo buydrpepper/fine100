@@ -123,16 +123,24 @@ void gen_samples(
  * @return the size of the rendered sound, guaranteed to be the sum of num_tail_samples and the array num_samples
  * 
  * */
-int render_recordings(i16 *const data, Recording const*const recordings, size_t rec_start_idx, size_t const*const indices, size_t const end_idx, size_t const*const num_samples, size_t const num_tail_samples) {
+int render_recordings(i16 *const data, size_t data_sz, Recording const*const recordings, size_t rec_start_idx, size_t const*const indices, size_t const num_recordings_selected, size_t const*const num_samples, size_t const num_tail_samples) {
 	size_t ind_towrite = 0;
+
+	i16 *cur_render = calloc(RECORDING_SIZE+num_tail_samples,sizeof(i16));
+
+	int32_t *mixed = calloc(data_sz, sizeof *mixed);
 	//simply concat for now
-	for(size_t i =0 ; i < end_idx; ++i) {
-		
-		memcpy(data+ind_towrite, recordings[((size_t)MAX_NUM_REC + rec_start_idx-indices[i])%MAX_NUM_REC].data, sizeof(i16)*num_samples[i]);
+	for(size_t i =0 ; i < num_recordings_selected; ++i) {
+
+		//prevent reverb feedback. NOTE: if later samples affect earlier ones, this is not enough.
+		memset(cur_render+num_samples[i], 0, num_tail_samples * sizeof(i16));
+
+		//-1 because index points to the currently working index
+		memcpy(cur_render, recordings[((size_t)MAX_NUM_REC + rec_start_idx-1-indices[i])%MAX_NUM_REC].data, sizeof(i16)*num_samples[i]);
 		int r = fast_rand();
 
-		fine_fx_amplify(data+ind_towrite, num_samples[i], 0.8f + 0.4*(r%3));
-		fine_fx_compress(data+ind_towrite, num_samples[i], SAMPLE_RATE, 5000.0f, 10.0f, 3.0f, 80.0f, 1.0f);
+		fine_fx_amplify(cur_render, num_samples[i], 0.8f + 0.4*(r%3));
+		fine_fx_compress(cur_render, num_samples[i], SAMPLE_RATE, 4000.0f, 10.0f, 3.0f, 80.0f, 1.0f);
 
 		//   fine_fx_compress(samples, n_samples, sample_rate,
 		//                    8000.0f,   // threshold (linear, same scale as int16 samples, e.g. 32767 max)
@@ -141,21 +149,60 @@ int render_recordings(i16 *const data, Recording const*const recordings, size_t 
 		//                    80.0f,     // release_ms
 		//                    1.0f);     // makeup gain (linear multiplier)
 
-		fine_fx_fade_linear(data+ind_towrite, num_samples[i], (r%3)*num_samples[i]/8, (r%3)*num_samples[i]/8);
+		size_t const NUM_FADE_SAMPLES = num_samples[i]/8;
+		fine_fx_fade_linear(cur_render, num_samples[i], NUM_FADE_SAMPLES, NUM_FADE_SAMPLES);
 
-		ind_towrite += num_samples[i];
+
+		float r1 = (float)(fast_rand()%3)/2;
+		float r2 = (float)(fast_rand()%3)/2;
+		float room = r1;
+		float damp = r2;
+		float wet  = 1;
+		float dry  = 0;
+		
+
+		reverb_set_params(&my_reverb, room, damp, wet, dry);
+		reverb_reset(&my_reverb); //must be called to destroy prev. samples
+		fine_fx_reverb(cur_render, num_samples[i]+num_tail_samples, &my_reverb);
+
+		for(size_t j = 0; j < num_samples[i]+num_tail_samples; ++j) {
+			mixed[ind_towrite+j] += cur_render[j];
+		}
+
+		//Actually, this can be anything we like as long as it doesn't overflow.
+		//The following line is the natural thing to do:
+		ind_towrite += num_samples[i]; 
+		//This line is added to "blend" the samples together
+		ind_towrite -= (4*(1-r2)+2)*NUM_FADE_SAMPLES;
 	}
+
+
+	free(cur_render);
 
 	size_t const total_num_samples = ind_towrite + num_tail_samples;
 
-	float r1 = (float)fast_rand()/RAND_MAX;
-	float r2 = (float)fast_rand()/RAND_MAX;
-	float room = r1;
-	float damp = r2;
-	float wet  = r1;
-	float dry  = 1-r1;
-	reverb_set_params(&my_reverb, room, damp, wet, dry);
-	fine_fx_reverb(data, total_num_samples, &my_reverb);
+
+
+	//Limiter to prevent clipping
+	//potential off by one error is negligible
+	i16 const THRESHOLD = INT16_MAX*0.8;
+	float curgain = 8.0f;
+	float targain = 0.8f;
+	float const attack = 0.1f;
+	float const rel = 0.99f;
+	for(size_t i =0; i< total_num_samples; ++i) {
+		float const mag = fabs(curgain*(mixed[i]));
+		targain = mag > THRESHOLD? THRESHOLD/mag : 0.8;
+		if(targain < curgain) 
+			curgain = targain*(1.0f-attack) + attack*curgain;
+		else 
+			curgain = targain*(1.0f-rel) + rel*curgain;
+		float new = curgain*mixed[i];
+		if(new >= INT16_MAX) new = INT16_MAX;
+		else if (new <= INT16_MIN) new = INT16_MIN;
+		data[i] = roundf(new);
+	}
+	free(mixed);
 	return total_num_samples;
 }
 
@@ -167,9 +214,10 @@ int fine_thread_output(void *ptr) {
 	size_t recordings_indices[OPT_NUM_RECORDINGS] = {0};
 	size_t num_samples[OPT_NUM_RECORDINGS] = {0};
 
-	size_t const NUM_TAIL_SAMPLES = SAMPLE_RATE*2; //2 seconds
+	size_t const NUM_TAIL_SAMPLES = SAMPLE_RATE*8; //8 seconds
 	//NOTE: IMPORTANT: output length must be the same as the recordings concatentaed, plus the tail
-	i16 *data = calloc(NUM_TAIL_SAMPLES + RECORDING_SIZE*OPT_NUM_RECORDINGS, sizeof(i16));
+	size_t const DATA_SZ = NUM_TAIL_SAMPLES + RECORDING_SIZE*OPT_NUM_RECORDINGS;
+	i16 *data = calloc(DATA_SZ, sizeof(i16));
 	while(!atomic_load_explicit(&sys->stopped, memory_order_acquire)) {
 		mtx_lock(&sys->playback_mtx);
 		while(!atomic_load_explicit(&sys->play, memory_order_acquire)) {
@@ -178,18 +226,17 @@ int fine_thread_output(void *ptr) {
 		//This needs to be fast
 		size_t end_ind = gen_indices(recordings_indices, sys->rec_csz);
 		gen_samples(num_samples, sys->rec_arr, recordings_indices, end_ind, RECORDING_SIZE);
-		
+		size_t rec_idx = sys->rec_idx;	
 		mtx_unlock(&sys->playback_mtx);
 
 		//NOTE: We don't lock bc we won't read from oldest recording (the one that the input thread is actually touching)
-		int64_t data_sz = render_recordings(data, sys->rec_arr, sys->rec_idx, recordings_indices, end_ind, num_samples, NUM_TAIL_SAMPLES);
+		size_t data_sz = render_recordings(data, DATA_SZ, sys->rec_arr, rec_idx, recordings_indices, end_ind, num_samples, NUM_TAIL_SAMPLES);
 
 		fine_log(DEBUG, "expecting to play %zu seconds", data_sz/SAMPLE_RATE);
 		
 		snd_pcm_prepare(sys->pcm_out);
 		//Blocks until playback ends
 		fine_output_read_until(data, data_sz, sys->pcm_out, sys->hw_out, &sys->fade_out); 
-
 		snd_pcm_drop(sys->pcm_out);
 	}
 	free(data);

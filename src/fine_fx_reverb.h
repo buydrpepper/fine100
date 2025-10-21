@@ -13,8 +13,8 @@ typedef int16_t i16;
 
 // --- Tunings from tuning.h (Left Channel) ---
 //
-#define NUM_COMBS       8
-#define NUM_ALLPASSES   4
+#define NUM_COMBS       8 //8
+#define NUM_ALLPASSES   4 //4
 
 // Comb filter buffer sizes (Left channel)
 #define combtuningL1    1116
@@ -112,6 +112,14 @@ typedef struct {
  * @param rvb Pointer to the reverb model to initialize.
  */
 void reverb_init(fine_reverb_model *rvb);
+
+/**
+ * @brief Resets the reverb's internal state.
+ * Call this to clear all delay lines and filter memory without
+ * affecting the current parameters.
+ * @param rvb Pointer to the reverb model to reset.
+ */
+void reverb_reset(fine_reverb_model *rvb);
 
 /**
  * @brief Sets the reverb parameters.

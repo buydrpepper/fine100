@@ -119,6 +119,34 @@ void reverb_init(fine_reverb_model *rvb) {
     // Calculate initial coefficients
     reverb_update(rvb);
 }
+// ... (near the other public functions)
+
+void reverb_reset(fine_reverb_model *rvb) {
+    // Reset filter state (indices and stores)
+    for (int i = 0; i < NUM_COMBS; i++) {
+        rvb->combs[i].bufidx = 0;
+        rvb->combs[i].filterstore = 0.0f;
+    }
+    for (int i = 0; i < NUM_ALLPASSES; i++) {
+        rvb->allpasses[i].bufidx = 0;
+    }
+
+    // Zero out all delay line buffers
+    memset(rvb->buf_comb1, 0, sizeof(rvb->buf_comb1));
+    memset(rvb->buf_comb2, 0, sizeof(rvb->buf_comb2));
+    memset(rvb->buf_comb3, 0, sizeof(rvb->buf_comb3));
+    memset(rvb->buf_comb4, 0, sizeof(rvb->buf_comb4));
+    memset(rvb->buf_comb5, 0, sizeof(rvb->buf_comb5));
+    memset(rvb->buf_comb6, 0, sizeof(rvb->buf_comb6));
+    memset(rvb->buf_comb7, 0, sizeof(rvb->buf_comb7));
+    memset(rvb->buf_comb8, 0, sizeof(rvb->buf_comb8));
+
+    memset(rvb->buf_allpass1, 0, sizeof(rvb->buf_allpass1));
+    memset(rvb->buf_allpass2, 0, sizeof(rvb->buf_allpass2));
+    memset(rvb->buf_allpass3, 0, sizeof(rvb->buf_allpass3));
+    memset(rvb->buf_allpass4, 0, sizeof(rvb->buf_allpass4));
+}
+
 
 void reverb_set_params(fine_reverb_model *rvb, float roomsize, float damp, float wet, float dry) {
     rvb->roomsize = roomsize;

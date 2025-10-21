@@ -89,6 +89,8 @@ size_t fine_input_write_until(i16 * const data, size_t const sz, snd_pcm_t *cons
 
 	float ema = INT16_MAX; //Since we stop on lower threshold
 	while(left > 0) {
+
+		fine_log(DEBUG, "ema lower: %f", ema);
 		snd_pcm_sframes_t const toread = left < per_read? left : per_read;
 		snd_pcm_sframes_t wasread; 
 		while((wasread = snd_pcm_readi(pcm_in, data+(sz-left), toread)) < 0) {
@@ -144,14 +146,16 @@ int fine_thread_input_idle(void *ptr) {
 	size_t const bufsz = IDLE_BUFSZ;
 	assert(num_in_samples <= bufsz);
 	
-	float const alpha_upper = 0.9; //NOTE: For faster perf, use fixed point
+	/* --- BEGIN DEFINITIONS FOR TUNING --- */
+	float const alpha_upper = 0.7; 
 	float const alpha_lower = 0.5; //high smoothing
-	float ema_upper = 0;
-	int const THRESH_UPPER = 0.3*INT16_MAX; //is it faster to compare int?
+	int const THRESH_UPPER = 15000; //is it faster to compare int?
 	int const THRESH_LOWER = 1000;
+	/* --- END DEFINITIONS FOR TUNING --- */
 
 	i16 *tmp_buf = calloc(num_in_samples, sizeof(*tmp_buf));
 
+	float ema_upper = 0;
 	// --- WARM-UP READ ---
 	// Read and discard the first buffer
 	fine_input_write_buf(tmp_buf, num_in_samples, sys->pcm_in, sys->hw_in);
@@ -160,6 +164,8 @@ int fine_thread_input_idle(void *ptr) {
 	struct timespec last_recording = {0};
 	clock_gettime(CLOCK_MONOTONIC_COARSE, &last_recording);
 	while(!atomic_load_explicit(&sys->stopped, memory_order_acquire)) {
+
+		fine_log(DEBUG, "ema upper: %f", ema_upper);
 		size_t const bufidx = sys->idle_buf_idx;
 		sys->idle_buf_idx = (sys->idle_buf_idx + num_in_samples)%bufsz;
 		i16 *const idle_buf = sys->idle_buf;
@@ -199,7 +205,7 @@ int fine_thread_input_idle(void *ptr) {
 			}
 			sys->rec_arr[sys->rec_idx].sz = IDLE_BUFSZ + fine_input_write_until(
 				sys->rec_arr[sys->rec_idx].data+IDLE_BUFSZ,
-				RECORDING_SIZE,
+				RECORDING_SIZE-IDLE_BUFSZ,
 				sys->pcm_in, sys->hw_in, alpha_lower, THRESH_LOWER
 			);
 

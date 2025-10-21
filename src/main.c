@@ -55,9 +55,9 @@ int main(int argc, char *argv[argc+1]) {
 	snd_pcm_hw_params_alloca(&params_in);
 
 	while(fine_init_devices(name_out, name_in, &pcm_out, &pcm_in, params_out, params_in)<0) {
+		fine_log(INFO, "Configuration failed. Retrying...");
 		struct timespec delay = {.tv_sec=3};
 		thrd_sleep(&delay, 0);
-		fine_log(INFO, "Configuration failed. Retrying...");
 	}
 
 	ASys *const sys = alloca(sizeof(ASys));
