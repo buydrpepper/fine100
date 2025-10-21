@@ -13,3 +13,4 @@ void fine_fx_compress(int16_t * data,
                       float  release_ms,
                       float  makeup_gain);
 
+void fine_fx_fade_linear(i16 *data, size_t sz, size_t in, size_t out);

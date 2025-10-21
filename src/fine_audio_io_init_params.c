@@ -28,10 +28,15 @@ int fine_init_devices(char const*const out_name, char const*const in_name,
 		fine_exit("Fine_init: One of the params are null");
 
 	//Open devices
-	if(snd_pcm_open(pcm_out_addr, out_name, SND_PCM_STREAM_PLAYBACK, 0) < 0)
+	if(snd_pcm_open(pcm_out_addr, out_name, SND_PCM_STREAM_PLAYBACK, 0) < 0) {
 		fine_log(WARN, "PCM device %s could not be opened for playback", out_name);
-	if(snd_pcm_open(pcm_in_addr, in_name, SND_PCM_STREAM_CAPTURE, 0) < 0)
+		return -1;
+	}
+	if(snd_pcm_open(pcm_in_addr, in_name, SND_PCM_STREAM_CAPTURE, 0) < 0) {
+
 		fine_log(WARN, "PCM device %s could not be opened for capture", in_name);
+		return -1;
+	}
 	fine_log(DEBUG, "devices opened");
 
 	//register to avoid taking address
@@ -39,8 +44,12 @@ int fine_init_devices(char const*const out_name, char const*const in_name,
 	register snd_pcm_t *const pcm_in = *pcm_in_addr;
 
 	//Begin hw config
-	if(snd_pcm_hw_params_any(pcm_out, params_out) < 0)
+	if(snd_pcm_hw_params_any(pcm_out, params_out) < 0) {
+
 		fine_log(WARN, "Output device cannot be configured.");
+
+		return -1;
+	}
 	if(snd_pcm_hw_params_any(pcm_in, params_in) < 0) {
 		fine_log(WARN, "Input device cannot be configured.");
 		return -1;
