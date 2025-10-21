@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <alsa/asoundlib.h>
 #include <threads.h>
+#include <stdbool.h>
 
 typedef int16_t i16;
 
