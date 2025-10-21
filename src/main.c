@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdatomic.h>
 #include <time.h>
 #include "fine_definitions.h"
 #include "fine_log.h"
@@ -14,8 +15,10 @@ int debugthread(void *ptr) {
 	ASys *const sys = ptr;
 	while(1) {
 		char c = getchar();
-		if(c == 'p') 
+		if(c == 'p')  {
 			cnd_signal(&sys->playback);
+			atomic_store(&sys->play, 1);
+		}
 		else if(c == 'q') exit(0);
 	}
 }
