@@ -1,0 +1,1 @@
+gcc main.c p99/p99.h fine_log.h fine_audio_io_output_system.c fine_inline.c fine_fx.h fine_fx.c fine_definitions.h fine_audio_io_test.c fine_audio_io_init_params.c fine_audio_io_input_system.c fine_audio_io.h -lasound -o hi
